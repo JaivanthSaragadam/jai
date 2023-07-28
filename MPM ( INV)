@@ -1,0 +1,1764 @@
+import time
+from ecgdetectors import Detectors
+
+'''
+--------------------------------------------------------hard ware---------------------------------------------------------------------
+######## pi ##################################################
+import RPi.GPIO as GPIO
+
+#Disable warnings (optional)
+GPIO.setwarnings(False)
+#Select GPIO mode
+GPIO.setmode(GPIO.BCM)
+
+
+#reset wroom
+def resetesp():
+        #resetesp
+        espreset=17
+        GPIO.setup(espreset,GPIO.OUT)
+        GPIO.output(espreset,GPIO.HIGH)
+        time.sleep(1)
+        GPIO.output(espreset,GPIO.LOW)
+        time.sleep(3)
+        GPIO.output(espreset,GPIO.HIGH)
+        print ("reset done")
+        time.sleep(10)
+        
+#resetesp()
+##################################################
+#Set buzzer - pin 26 as output
+buzzer=26
+GPIO.setup(buzzer,GPIO.OUT)
+GPIO.output(buzzer,GPIO.HIGH)
+print ("Beep")
+time.sleep(0.5) # Delay in seconds
+GPIO.output(buzzer,GPIO.LOW)
+print ("No Beep")
+--------------------------------------------------hardware-----------------------------------------------------------------------------
+'''
+from tkinter import S
+import PySimpleGUI as sg
+import pandas as pd
+import os
+import sys
+print(os.getcwd())
+
+
+from scipy.signal import medfilt
+from scipy import signal
+from scipy import fft, arange
+from scipy.signal import find_peaks
+from subprocess import Popen, PIPE
+from pyqtgraph.Qt import QtGui, QtCore
+import pyqtgraph as pg
+#from PyQt4 import *
+from PyQt5.QtGui import *
+from PyQt5.QtCore import QTimer , QTime ,Qt
+from PyQt5.QtWidgets import QPushButton
+
+
+#from PyQt4.QtCore import QTimer
+#from PyQt5 import  QtWidgets
+from PyQt5.QtWidgets import QWidget , QMessageBox , QInputDialog , QApplication, QComboBox, QDialog,QDialogButtonBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,QLabel, QLineEdit, QMenu, QMenuBar, QPushButton, QSpinBox, QTextEdit,QVBoxLayout
+import collections
+import random
+
+import math
+import numpy as np
+import serial
+import serial.tools.list_ports
+ports = serial.tools.list_ports.comports()
+for p in ports:
+    print(p.device)
+print(len(ports), 'ports found')
+import threading
+
+
+class SerialReader:
+    def __init__(self, s):
+        self.buf = bytearray()
+        self.s = s
+
+    def readline(self):
+       
+        i = self.buf.find(b"\n")
+
+        if i >= 0:
+            r = self.buf[:i+1]
+            self.buf = self.buf[i+1:]
+            return r
+        while True:
+            i = max(1, min(2048, self.s.in_waiting))
+            data = self.s.read(i)
+            i = data.find(b"\n")
+            if i >= 0:
+                r = self.buf + data[:i+1]
+                self.buf[0:] = data[i+1:]
+                return r
+            else:
+                self.buf.extend(data)
+
+
+
+class DynamicPlotter():
+
+    def __init__(self,size=(600,350)):
+        self.isGraphClicked = False
+        self.detectors = Detectors(Constants.Fs)
+
+        self.baseline = 300
+        self.selectedPlots = ['L1' , 'L2' , 'L3']
+        self.plotMap = {'L1': True, 'L2': True, 'L3': True, 'V1': False, 'V2': False, 'V3': False, 'V4': False, 'V5': False, 'V6': False, 'aVR': False, 'aVL': False, 'aVF': False}
+        
+        self.isbeep = False
+        self.isCalibrationDone = False
+        self.beepnostyle = "border-radius : 50;border : 5px solid black"
+        self.beepredstyle = "border-radius : 50;border : 5px solid red"
+
+        self.ecgstylesheet = "font-weight: bold;font-family: Arial;font-size:120px solid;color:#64e67b;qproperty-alignment: AlignCenter"
+        self.redcolourecgstylesheet = "font-weight: bold;font-family: Arial;font-size:120px solid;color:rgb(255,0,0);qproperty-alignment: AlignCenter"
+
+
+        self.nocolourstylesheet = 'font-weight: bold;font-family: Arial;font-size:32px solid;color:none;qproperty-alignment: AlignCenter'
+        self.redcolourstylesheet = 'font-weight: bold;font-family: Arial;font-size:105px solid;color:rgb(255,0,0);qproperty-alignment: AlignCenter'
+        self.redcolourtempstylesheet = 'font-weight: bold;font-family: Arial;font-size:32px solid;color:rgb(255,0,0);qproperty-alignment: AlignCenter'
+        self.redcolournibpstylesheet = 'font-weight: bold;font-family: Arial;font-size:50px solid;color:rgb(255,0,0);qproperty-alignment: AlignCenter'
+        self.loggerstyle = "background-color:#000000;color:#228B22;font-size:14px;font-weight: bold;"
+        self.loggerredstyle = "background-color:#000000;color:rgb(255,0,0);font-size:14px;font-weight: bold;"
+        self.counter1=0
+        self.plot1Max=0
+        self.plot2Max=0
+        self.plot3Max=0
+        self.isbeepPlaying = False
+        #self.cells = 810
+        self.cells = 750
+        #self.unfilltered_data2 = np.array(df2.iloc[:,-1].values)
+        print("xxxxxxxxx")
+        #print(len(np.array(ecg)))
+        print("xxxxxxxxx")
+        #self.unfilltered_data= np.array(ecg)
+        #print("len(self.unfilltered_data)")
+        self.live_bpm = "0"
+        self.live_spo2 = "0"
+
+        self.live_sys = "0"
+        self.live_dia = "0"
+
+        self.live_temp = "0"
+
+        # Data stuff
+        self._bufsize = int(self.cells-1)
+        print(self._bufsize)
+        self.sensorbuffer = collections.deque(["0!0!0"]*self._bufsize, self._bufsize)
+        self.bpbuffer = collections.deque(["0!0"]*self._bufsize, self._bufsize)
+        self.databuffer = collections.deque([300.0]*self._bufsize, self._bufsize)
+        self.databuffer2 = collections.deque([300.0]*self._bufsize, self._bufsize)
+        self.databuffer3 = collections.deque([300.0]*self._bufsize, self._bufsize)
+        self.databuffer4 = collections.deque([300.0]*self._bufsize, self._bufsize)
+
+        self.databufferecg = collections.deque([300.0]*self._bufsize, self._bufsize)
+        self.databufferppg = collections.deque([300.0]*self._bufsize, self._bufsize)
+        self.databuffertemp = collections.deque([0.0]*self._bufsize, self._bufsize)
+        self.avghrbuffer = collections.deque(maxlen = 10)
+        self.avgspotwobuffer = collections.deque(maxlen = 10)
+
+        self.x = np.linspace(0, 1, self._bufsize)
+        self.y = np.zeros(self._bufsize, dtype=np.float)
+        self.y2 = np.zeros(self._bufsize, dtype=np.float)
+        self.y3 = np.zeros(self._bufsize, dtype=np.float)
+
+       
+        # PyQtGraph stuff
+        self.app = QtGui.QApplication([])
+       
+        self.plt = pg.PlotWidget()
+
+        
+        self.plt.setBackground('#000000')
+        #self.plt.resize(*size)
+        #self.plt.showGrid(x=False, y=False)
+        self.plt.setTitle(Constants.plot1Style)
+        self.plt.setLabel('left', 'amplitude', 'V')
+        self.plt.setLabel('bottom', 'time', 's')
+        #self.plt.getPlotItem().hideAxis('bottom')
+        #self.plt.getPlotItem().hideAxis('left')
+        #self.plt.setYRange(0, 600, padding=0)
+        self.curve = self.plt.plot(self.x, self.y, pen= pg.mkPen(Constants.plot1Colour, width=Constants.graphWidth))
+
+        self.plt.getPlotItem().hideAxis('bottom')
+        self.plt.getPlotItem().hideAxis('left')
+       
+        self.curve.setData(self.x, self.databuffer)
+
+        self.plt2 = pg.PlotWidget()
+
+
+
+
+        #self.plt2.setYRange(100, 300)
+        #self.plt2.setBackground('#161616')
+        #self.plt2.showGrid(x=True, y=True , alpha = 1.0)
+        self.plt2.setTitle(Constants.plot2Style)
+        self.plt2.setLabel('left', 'amplitude', 'V')
+        self.plt2.setLabel('bottom', 'time', 's')
+        #self.plt2.getPlotItem().hideAxis('bottom')
+        #self.plt2.getPlotItem().hideAxis('left')
+        #self.plt2.setYRange(-300, 900, padding=0)
+        self.plt2.getPlotItem().hideAxis('bottom')
+        self.plt2.getPlotItem().hideAxis('left')
+
+       
+
+        self.curve2 = self.plt2.plot(self.x, self.y2, pen=pg.mkPen(Constants.plot2Colour, width=Constants.graphWidth))
+        #self.curve2.getViewBox().invertY(True)
+        self.curve2.setData(self.x, self.databuffer)
+
+
+        self.plt3 = pg.PlotWidget()
+        #self.plt3.setYRange(100, 300)
+        self.plt3.setBackground('#000000')
+        self.plt3.showGrid(x=False, y=False)
+        self.plt3.setTitle(Constants.plot3Style)
+        self.plt3.setLabel('left', 'amplitude', 'V')
+        self.plt3.setLabel('bottom', 'time', 's')
+        #self.plt3.setYRange(-300, 900, padding=0)
+        self.plt3.getPlotItem().hideAxis('bottom')
+        self.plt3.getPlotItem().hideAxis('left')
+
+        #pg.mkPen('g', width=1)
+        #self.plt3.setYRange(0, 600, padding=0)
+        self.curve3 = self.plt3.plot(self.x, self.databuffer,   pen=pg.mkPen(Constants.plot3Colour, width=Constants.graphWidth))
+        #self.curve2.getViewBox().
+        #self.curve3.setData(self.x, self.unfilltered_data)
+
+
+
+        #plot 4
+        self.plt4 = pg.PlotWidget()
+        self.plt4.setBackground('#000000')
+        #self.plt.resize(*size)
+        #self.plt.showGrid(x=False, y=False)
+        self.plt4.setTitle(Constants.plot4Style)
+        self.plt4.setLabel('left', 'amplitude', 'V')
+        self.plt4.setLabel('bottom', 'time', 's')
+        #self.plt.getPlotItem().hideAxis('bottom')
+        #self.plt.getPlotItem().hideAxis('left')
+        #self.plt.setYRange(0, 600, padding=0)
+        self.curve4 = self.plt4.plot(self.x, self.y, pen=pg.mkPen(Constants.plot4Colour, width=Constants.graphWidth))
+        
+        self.plt4.getPlotItem().hideAxis('bottom')
+        self.plt4.getPlotItem().hideAxis('left')
+       
+        self.curve4.setData(self.x, self.databuffer)
+       
+       
+        self.window = QtGui.QWidget()
+
+        self.window.setWindowTitle('AYT')
+
+        #buttonstyles
+
+       
+        beep_button  = QtGui.QPushButton('')
+        beep_button.setFixedSize(20, 20)
+        beep_button.setStyleSheet(self.beepredstyle)
+
+
+        style = "background-color:#000000;color:#FFFFFF;font-size:17px;font-weight: bold;"
+        head_button  = QtGui.QPushButton('AY TECHNOLOGIES')
+        head_button.setStyleSheet(style)
+        head_button.setEnabled(False)
+
+
+        addbuttonstyle = "background-color:rgb(0,0,0);color:#FFFFFF;font-size:14px;font-weight: bold;"
+        add_button  = QtGui.QPushButton('Select Graph')
+        add_button.setStyleSheet(addbuttonstyle)
+        add_button.clicked.connect(self.addbutton_clicked)
+       
+        devider  = QtGui.QLabel('                                 ')
+        devider.setStyleSheet(self.loggerstyle)
+        
+
+        self.head_clock  = QtGui.QLabel('9:45:34')
+        self.clockstyle = "background-color:#000000;color:#FFFFFF;font-size:17px;font-weight: bold;"
+        self.head_clock.setStyleSheet(self.clockstyle)
+
+        self.batteryinfo  = QtGui.QLabel('BATTERY 82%')
+        self.batteryinfo.setStyleSheet(self.clockstyle)
+
+
+
+        self.label_0 = QtGui.QVBoxLayout()
+        testWidget0 = QtGui.QFrame()
+        testWidget0.setFixedSize(300,180)
+        testWidget0.setObjectName("myWidget0")
+        #testWidget0.setStyleSheet("#myWidget0 {border :1px solid #339062;}")
+        testLayout0 = QtGui.QHBoxLayout()
+        testWidget0.setLayout(testLayout0)
+        self.nameLabel0 = QtGui.QLabel()
+        self.nameLabel0.mousePressEvent = self.showhrsettings
+        self.nameLabel0.setText('ECG\n'+str(Constants.ecgmin)+'-'+str(Constants.ecgmax)+'\nbpm')
+        self.nameLabel0.setStyleSheet("font-family: Arial;font-size:18px;color:#64e67b;qproperty-alignment: AlignTop")
+        self.nameLabel00 = QtGui.QLabel()
+        self.nameLabel00.setText('---')
+        
+        self.nameLabel00.setStyleSheet(self.ecgstylesheet)
+        testLayout0.addWidget(self.nameLabel0)
+        testLayout0.addWidget(self.nameLabel00)
+        self.label_0.addWidget(testWidget0)
+
+
+
+        self.label_1 = QtGui.QVBoxLayout()
+        testWidget = QtGui.QFrame()
+        testWidget.setFixedSize(300,130)
+        testWidget.setObjectName("myWidget")
+        #testWidget.setStyleSheet("#myWidget {border :1px solid #339062;}")
+        testLayout = QtGui.QHBoxLayout()
+        testWidget.setLayout(testLayout)
+        self.nameLabel1 = QtGui.QLabel()
+        self.nameLabel1.mousePressEvent = self.showhrsettings
+        self.nameLabel1.setText('HR\n'+str(Constants.ecgmin)+'-'+str(Constants.ecgmax)+'\nbpm')
+        self.nameLabel1.setStyleSheet("font-family: Arial;font-size:18px;color:#64e67b;qproperty-alignment: AlignTop")
+        self.nameLabel11 = QtGui.QLabel()
+        self.nameLabel11.setText('---')
+        self.hrstylesheet = "font-weight: bold;font-family: Arial;font-size:105px solid;color:#64e67b;qproperty-alignment: AlignCenter"
+        self.nameLabel11.setStyleSheet(self.hrstylesheet)
+        testLayout.addWidget(self.nameLabel1)
+        testLayout.addWidget(self.nameLabel11)
+        self.label_1.addWidget(testWidget)
+
+
+        self.mainverticalbox2 = QtGui.QVBoxLayout()
+        mainverticalbox2_qframe = QtGui.QFrame()
+        mainverticalbox2_qframe.setFixedSize(300,130)
+        mainverticalbox2_qframe.setObjectName("myWidget2")
+        #mainverticalbox2_qframe.setStyleSheet("#myWidget2 {border :1px solid #339062;}")
+
+        insidehorizontallayout = QtGui.QHBoxLayout()
+        mainverticalbox2_qframe.setLayout(insidehorizontallayout)
+       
+       
+        self.spo2labelleft = QtGui.QLabel()
+        self.spo2labelleft.mousePressEvent = self.showspo2settings
+        self.spo2labelleft.setText('SPo2 %\n'+str(Constants.spo2min)+'-'+str(Constants.spo2max))
+        self.spo2labelleft.setStyleSheet('font-family: Arial;font-size:20px;color:#bfda4e;qproperty-alignment: AlignTop')
+       
+       
+        self.spo2info = QtGui.QLabel()
+        self.spo2info.setText('---')
+        self.spo2StyleSheet = "font-weight: bold;font-family: Arial;font-size:105px solid;color:#bfda4e;qproperty-alignment: AlignCenter"
+        self.spo2info.setStyleSheet(self.spo2StyleSheet)
+
+         
+        insidehorizontallayout.addWidget(self.spo2labelleft)
+        insidehorizontallayout.addWidget(self.spo2info)
+       
+        self.mainverticalbox2.addWidget(mainverticalbox2_qframe)
+
+
+        self.label_3 = QtGui.QVBoxLayout()
+       
+        testWidget3 = QtGui.QFrame()
+       
+        testWidget3.setFixedSize(300,130)
+        testWidget3.setObjectName("myWidget3")
+        #testWidget3.setStyleSheet("#myWidget3 {border :1px solid #339062;}")
+        testLayout3 = QtGui.QHBoxLayout()
+        testWidget3.setLayout(testLayout3)
+        self.nameLabel3 = QtGui.QLabel()
+        self.nameLabel3.setText('RR\n15-25\nppm')
+        self.nameLabel3.setStyleSheet("font-family: Arial;font-size:20px;color:#a1cfeb;qproperty-alignment: AlignTop");
+        self.nameLabel33 = QtGui.QLabel()
+        self.nameLabel33.setText('---')
+        self.nameLabel33.setStyleSheet("font-weight: bold;font-family: Arial;font-size:125px solid;color:#a1cfeb;qproperty-alignment: AlignCenter")
+        testLayout3.addWidget(self.nameLabel3)
+        testLayout3.addWidget(self.nameLabel33)
+        self.label_3.addWidget(testWidget3)
+
+        self.label_4 = QtGui.QVBoxLayout()
+        testWidget4 = QtGui.QFrame()
+        testWidget4.setFixedSize(300,150)
+        testWidget4.setObjectName("myWidget4")
+        #testWidget4.setStyleSheet("#myWidget4 {border :1px solid #339062;}")
+        testLayout4 = QtGui.QVBoxLayout()
+        testWidget4.setLayout(testLayout4)
+        self.nameLabel4 = QtGui.QLabel()
+        self.nameLabel4.setText('NIBP mmHg\n'+str(Constants.sysmin)+'-'+str(Constants.sysmax)+'/'+str(Constants.diamin)+'-'+str(Constants.diamax))
+        self.nameLabel4.mousePressEvent = self.shownibpsettings
+        self.nameLabel4.setStyleSheet("font-family: Arial;font-size:20px solid;color:#7ec8e3;qproperty-alignment: AlignTop");
+        self.nameLabel44 = QtGui.QLabel()
+        self.nameLabel44.setText('--- / ---')
+        self.nibpstylesheet = "font-weight: bold;font-family: Arial;font-size:50px solid;color:#7ec8e3;qproperty-alignment: AlignCenter"
+        self.nameLabel44.setStyleSheet(self.nibpstylesheet)
+       
+        self.nameLabel45 = QtGui.QLabel()
+        self.nameLabel45.setText('Sys / Dia')
+        self.nameLabel45.setStyleSheet("font-family: Arial;font-size:20px;color:#7ec8e3;qproperty-alignment: AlignRight");
+       
+       
+        testLayout4.addWidget(self.nameLabel4)
+        testLayout4.addWidget(self.nameLabel44)
+        testLayout4.addWidget(self.nameLabel45)
+
+        self.label_4.addWidget(testWidget4)
+       
+
+        self.label_5 = QtGui.QVBoxLayout()
+        testWidget5 = QtGui.QFrame()
+        testWidget5.setFixedSize(300,130)
+        testWidget5.setObjectName("myWidget5")
+        #testWidget5.setStyleSheet("#myWidget5 {border :1px solid #339062;}")
+        testLayout5 = QtGui.QVBoxLayout()
+        testWidget5.setLayout(testLayout5)
+        self.nameLabel5 = QtGui.QLabel()
+        self.nameLabel5.setText('TEMP (°C/°F)')
+        self.nameLabel5.setStyleSheet("font-family: Arial;font-size:20px;color:#b364d7;qproperty-alignment: AlignTop");
+
+        self.nameLabel56 = QtGui.QLabel()
+        self.nameLabel56.mousePressEvent = self.showtempraturesettings
+        self.nameLabel56.setText('     '+str(Constants.tempmin)+'-'+str(Constants.tempmax)+'°C        90-98.6°F')
+        self.nameLabel56.setStyleSheet("font-family: Arial;font-size:18px solid;color:#b364d7;qproperty-alignment: AlignLeft")
+
+                       
+        self.nameLabel55 = QtGui.QLabel()
+        self.nameLabel55.setText('25.5°C  77.9°F')
+        self.tempstylesheet = "font-weight: bold;font-family: Arial;font-size:32px solid;color:#b364d7;qproperty-alignment: AlignCenter"
+        self.nameLabel55.setStyleSheet(self.tempstylesheet)
+
+        
+       
+        testLayout5.addWidget(self.nameLabel5)
+        testLayout5.addWidget(self.nameLabel55)
+        testLayout5.addWidget(self.nameLabel56)
+
+        self.label_5.addWidget(testWidget5)
+
+       
+
+        #verical layout 1
+        self.mainlayout = QtGui.QVBoxLayout()
+       
+       
+        self.topHlayout = QtGui.QHBoxLayout()
+        self.topHlayout.addWidget(beep_button)
+        self.topHlayout.addWidget(head_button)
+        self.topHlayout.addWidget(add_button)
+        #self.topHlayout.addWidget(shutdown_button)
+
+        self.topHlayout.addWidget(devider)
+       
+
+        self.topHlayout.addWidget(self.head_clock)
+        self.topHlayout.addWidget(self.batteryinfo)
+
+
+
+        self.mainlayout.addLayout(self.topHlayout)
+
+        self.Vlayout1 = QtGui.QVBoxLayout()
+        self.Vlayout1.addWidget(self.plt)
+        self.Vlayout1.addWidget(self.plt2)
+        self.Vlayout1.addWidget(self.plt3)
+        self.Vlayout1.addWidget(self.plt4)
+
+        self.Vlayout2 = QtGui.QVBoxLayout()
+        self.Vlayout2.addLayout(self.label_0)
+        self.Vlayout2.addLayout(self.label_1)
+        self.Vlayout2.addLayout(self.mainverticalbox2)
+        self.Vlayout2.addLayout(self.label_4)
+        self.Vlayout2.addLayout(self.label_5)
+
+
+        self.Hlayout1 = QtGui.QHBoxLayout()
+        self.Hlayout1.addLayout(self.Vlayout1)
+        self.Hlayout1.addLayout(self.Vlayout2)
+
+   
+
+
+        self.mainlayout.addLayout(self.Hlayout1)
+
+
+        
+        self.topHlayout2 = QtGui.QHBoxLayout()
+      
+        
+        self.logger  = QtGui.QLabel('Loading ...')
+        self.logger.setStyleSheet(self.loggerstyle)
+        self.topHlayout2.addWidget(self.logger)
+        self.mainlayout.addLayout(self.topHlayout2)
+        self.window.setLayout(self.mainlayout)
+       
+    #---------------------START----------------------back ground colours for the screen-----------------------------------------------   
+         
+        #self.window.setStyleSheet("background-color:  #464646;")
+        self.window.setStyleSheet("background-color:  #000000;")
+        #self.window.setStyleSheet("background-color:  #808080;")
+       
+    #-------------------------------------------------back ground colours for the screen----------------END----------------------------   
+        
+
+        # creating a timer object
+        self.clocktimer = QTimer()
+        # adding action to timer
+        self.clocktimer.timeout.connect(self.showTime)
+        # update the timer every 1 second
+        self.clocktimer.start(1000)
+        
+        #--------------------START---------------------------THREADS--------------------------------------------------------------------
+        '''
+        QTimer.singleShot(1, self.bpReadThread)
+        self.bpSerial = serial.Serial(Constants.bpCom , Constants.bpSpeed)
+        time.sleep(1)
+        
+        
+        QTimer.singleShot(1, self.tempReadThread)
+        self.tempSerial = serial.Serial(Constants.tempCom , Constants.tempSpeed)
+        time.sleep(1)
+        
+    
+        QTimer.singleShot(0, self.sensorReadThread)
+        self.sensorSerial = serial.Serial(Constants.sensorCom , Constants.sensorSpeed)
+        time.sleep(3)
+        
+        
+        QTimer.singleShot(1, self.ecgReadThread)
+        self.ecgSerial = serial.Serial(Constants.ecgcom , Constants.ecgSpeed)
+        time.sleep(3)'''
+
+        #---------------------------------------------------THREADS-------------------------------------------END-----------------------
+    
+
+         
+        # QTimer
+        
+        QTimer.singleShot(1, self.ecgHrThread)
+        time.sleep(1)
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.updateplot)
+        self.timer.start()
+
+
+        self.window.show()
+        #self.window.showFullScreen()
+              
+
+    def showSettings(self):
+     #define layout
+     layout1 = [
+        [sg.Text('Patient ID', size=(15, 1)), sg.InputText()],
+        [sg.Text('Full Name', size=(15, 1)), sg.InputText()],
+        [sg.Text('Age', size=(15, 1)), sg.InputText()],
+        [sg.Text('Gender', size=(15, 1)), sg.InputText()],
+        [sg.Button('Add New Patient')]
+           ]
+     layout2=[
+    [sg.Text('HR min', size=(11,1)),sg.Input('',key='eQual1' , size=(11,1)),sg.Text('HR max', size=(11,1)),sg.Input('',key='eQual2' , size=(11,1)),sg.Checkbox('Sound Beep?', default=False)],
+    [sg.Text('SPo2 min', size=(11,1)),sg.Input('',key='eQual3' , size=(11,1)),sg.Text('SPo2 max', size=(11,1)),sg.Input('',key='eQual4' , size=(11,1)),sg.Checkbox('Sound Beep?', default=False)],
+    [sg.Text('NIBP(sys) min', size=(11,1)),sg.Input('',key='eQual5' , size=(11,1)),sg.Text('NIBP(sys) max', size=(11,1)),sg.Input('',key='eQual6' , size=(11,1)),sg.Checkbox('Sound Beep?', default=False)],
+    [sg.Text('NIBP(dia) min', size=(11,1)),sg.Input('',key='eQual7' , size=(11,1)),sg.Text('NIBP(dia) max', size=(11,1)),sg.Input('',key='eQual8' , size=(11,1)),sg.Checkbox('Sound Beep?', default=False)],
+    [sg.Text('RR min', size=(11,1)),sg.Input('',key='eQual9' , size=(11,1)),sg.Text('RR max', size=(11,1)),sg.Input('',key='eQual10' , size=(11,1)),sg.Checkbox('Sound Beep?', default=False)],
+    [sg.Text('TEMP°C min', size=(11,1)),sg.Input('',key='eQual11' , size=(11,1)),sg.Text('TEMP°C max', size=(11,1)),sg.Input('',key='eQual12' , size=(11,1)),sg.Checkbox('Sound Beep?', default=False)],
+         [sg.Button('Save')]]
+     layout3= [[sg.Text('Dummy1', size=(15,1)),sg.Input('',key='eLastJ')],
+           [sg.Text('Dummy2', size=(15,1)),sg.Input('',key='eJFdt')],
+           [sg.Text('Dummy3', size=(15,1)),sg.Input('',key='eJTdt')],
+           [sg.Text('Dummy4', size=(15,1)),sg.Input('',key='eLJcmpy')],
+          [sg.Button('Save Dummy')]]
+     #Define Layout with Tabs        
+     tabgrp = [[sg.TabGroup([[sg.Tab('Add Patient', layout1, border_width =1,
+                                tooltip='Personal details', element_justification= 'center'),
+                    sg.Tab('Defaults', layout2 , border_width =1,
+                                tooltip='Defaults', element_justification= 'center'),
+                    sg.Tab('Dummy', layout3,
+                           tooltip='Enter Dummy' , element_justification= 'center')]],
+                           tab_location='centertop',
+                            border_width=2)]]
+       
+     #Define Window
+     window =sg.Window("Settings",tabgrp, location=(900,500) ,  resizable=False , keep_on_top = True)
+     while True:
+      event, values = window.read()
+      print(event, values)
+      if event == sg.WIN_CLOSED:
+        break
+     window.close()      
+
+   
+   
+   
+    def butter_lowpass(self , cutoff, nyq_freq):
+     order=12
+     #order = 4
+     normal_cutoff = float(cutoff) / nyq_freq
+     #normal_cutoff = 23
+     b, a = signal.butter(order, normal_cutoff, btype='lowpass')
+     return b, a
+
+
+
+    def lowpass_filter(self , data, cutoff_freq, nyq_freq):
+     b, a = self.butter_lowpass(cutoff_freq, nyq_freq)
+     y = signal.filtfilt(b, a, data)
+     return y
+
+
+    def bandpass(self, data , lowcut, highcut, order=5):
+     nyq = 0.5 * Constants.Fs
+     low = lowcut / nyq
+     high = highcut / nyq
+     b, a = signal.butter(order, [low, high], btype='bandpass')
+     final_data = signal.filtfilt(b, a, data)
+     #final_dataa = signal.lfilter(b, a, data)
+     return final_data
+
+    def bandstop(self, data , lowcut, highcut, order=5):
+     nyq = 0.5 * Constants.Fs
+     low = lowcut / nyq
+     high = highcut / nyq
+     b, a = signal.butter(order, [low, high], btype='bandstop')
+     final_data = signal.filtfilt(b, a, data)
+     #final_dataa = signal.lfilter(b, a, data)
+     return final_data
+    
+
+   
+   
+    def showhrsettings(self, event):
+         myfont = "Ariel 12 bold"
+         minmaxlayout = [
+             [sg.Text('Threshold Settings', size=(16, 1), font="Helvetica 20 bold",  justification='center')]
+             ,
+         [sg.Text("HR max(bpm)" , font = "Ariel 16") , sg.Checkbox('Enable Beep Sound' ,change_submits=True, font="Helvetica 13", default=Constants.ecgMaxBeep , auto_size_text=True , key='ecgmax_checkbox'),],
+         [sg.Button("+", size=(10,5), font=myfont, key='ecgmax+'),sg.Text(str(Constants.ecgmax), size=(3, 1), font="Helvetica 80 bold", key='ecgmax_value', justification='center'),sg.Button("-", size=(10,5), font=myfont, key='ecgmax-')],
+         [sg.Text("HR min(bpm)" , font = "Ariel 16")  , sg.Checkbox('Enable Beep Sound' ,change_submits=True ,  font="Helvetica 13", default=Constants.ecgMinBeep , auto_size_text=True, key='ecgmin_checkbox')],
+         [sg.Button("+", size=(10,5), font=myfont, key='ecgmin+'),sg.Text(str(Constants.ecgmin), size=(3, 1), font="Helvetica 80 bold",key='ecgmin_value', justification='center'),sg.Button("-", size=(10,5), font=myfont, key='ecgmin-')],
+          [sg.Button("SAVE", size=(15,2), font=myfont, key='save') , sg.Button("CLOSE", size=(15,2), font=myfont, key='close')]
+          ]
+
+         #Define Window
+         # ,  disable_minimize=True not working in pi
+         window =sg.Window("HR Threshold Settings",minmaxlayout , location=(400,200)  , keep_on_top=True,  element_justification='c' , no_titlebar = True)
+
+
+         while True:
+             event, values = window.read()
+             if event == sg.WIN_CLOSED:
+                            break
+             if event == 'close':
+                 self.plt4.setTitle("xxx")
+                 break
+
+             if event == 'save':
+                 self.nameLabel1.setText('HR\n'+str(Constants.ecgmin)+'-'+str(Constants.ecgmax)+'\nbpm')
+                 Constants.ecgMaxBeep =  values['ecgmax_checkbox']
+                 Constants.ecgMinBeep =  values['ecgmin_checkbox']
+                 break
+
+             if event == 'ecgmax+':
+                 Constants.ecgmax = Constants.ecgmax+1
+                 window['ecgmax_value'].update(str(Constants.ecgmax))
+             elif event == 'ecgmax-':
+                 Constants.ecgmax = Constants.ecgmax-1
+                 window['ecgmax_value'].update(str(Constants.ecgmax))
+             elif event == 'ecgmin+':
+                 Constants.ecgmin = Constants.ecgmin+1
+                 window['ecgmin_value'].update(str(Constants.ecgmin))
+             elif event == 'ecgmin-':
+                 Constants.ecgmin = Constants.ecgmin-1
+                 window['ecgmin_value'].update(str(Constants.ecgmin))
+
+         window.close()
+
+
+    def showspo2settings(self, event):
+         myfont = "Ariel 12 bold"
+         minmaxlayout = [
+             [sg.Text('Threshold Settings', size=(16, 1), font="Helvetica 20 bold",  justification='center')]
+             ,
+         [sg.Text("SPo2 max(%)" , font = "Ariel 16") , sg.Checkbox('Enable Beep Sound' ,change_submits=True, font="Helvetica 13", default=Constants.spo2MaxBeep , auto_size_text=True , key='spo2max_checkbox'),],
+         [sg.Button("+", size=(10,5), font=myfont, key='spo2max+'),sg.Text(str(Constants.spo2max), size=(3, 1), font="Helvetica 80 bold", key='spo2max_value', justification='center'),sg.Button("-", size=(10,5), font=myfont, key='spo2max-')],
+         [sg.Text("SPo2 min(%)" , font = "Ariel 16")  , sg.Checkbox('Enable Beep Sound' ,change_submits=True ,  font="Helvetica 13", default=Constants.spo2MinBeep , auto_size_text=True, key='spo2min_checkbox')],
+         [sg.Button("+", size=(10,5), font=myfont, key='spo2min+'),sg.Text(str(Constants.spo2min), size=(3, 1), font="Helvetica 80 bold",key='spo2min_value', justification='center'),sg.Button("-", size=(10,5), font=myfont, key='spo2min-')],
+          [sg.Button("SAVE", size=(15,2), font=myfont, key='save') , sg.Button("CLOSE", size=(15,2), font=myfont, key='close')]
+          ]
+         #Define Window
+         # ,  disable_minimize=True not working in pi
+         window =sg.Window("SPo2 Threshold Settings",minmaxlayout , location=(400,200)  , keep_on_top=True,  element_justification='c' , no_titlebar = True)
+
+         while True:
+             event, values = window.read()
+             if event == sg.WIN_CLOSED:
+                            break
+             if event == 'close':
+                 break
+             if event == 'save':
+                 self.spo2labelleft.setText('SPo2 %\n'+str(Constants.spo2min)+'-'+str(Constants.spo2max))
+                 Constants.spo2MaxBeep =  values['spo2max_checkbox']
+                 Constants.spo2MinBeep =  values['spo2min_checkbox']
+                 break
+             if event == 'spo2max+':
+                 Constants.spo2max = Constants.spo2max+1
+                 window['spo2max_value'].update(str(Constants.spo2max))
+             elif event == 'spo2max-':
+                 Constants.spo2max = Constants.spo2max-1
+                 window['spo2max_value'].update(str(Constants.spo2max))
+             elif event == 'spo2min+':
+                 Constants.spo2min = Constants.spo2min+1
+                 window['spo2min_value'].update(str(Constants.spo2min))
+             elif event == 'spo2min-':
+                 Constants.spo2min = Constants.spo2min-1
+                 window['spo2min_value'].update(str(Constants.spo2min))
+         window.close()
+
+
+    def shownibpsettings(self, event):
+         myfont = "Ariel 12 bold"
+         minmaxlayout = [
+         [sg.Text('SYS Threshold Settings', size=(16, 1), font="Helvetica 20 bold",  justification='center')],
+         [sg.Text("SYS max(mmHg)" , font = "Ariel 16") , sg.Checkbox('Enable Beep Sound' ,change_submits=True, font="Helvetica 13", default=Constants.sysMaxBeep , auto_size_text=True , key='sysmax_checkbox'),],
+         [sg.Button("+", size=(10,5), font=myfont, key='sysmax+'),sg.Text(str(Constants.sysmax), size=(3, 1), font="Helvetica 80 bold", key='sysmax_value', justification='center'),sg.Button("-", size=(10,5), font=myfont, key='sysmax-')],
+         [sg.Text("SYS min(mmHg)" , font = "Ariel 16")  , sg.Checkbox('Enable Beep Sound' ,change_submits=True ,  font="Helvetica 13", default=Constants.sysMinBeep , auto_size_text=True, key='sysmin_checkbox')],
+         [sg.Button("+", size=(10,5), font=myfont, key='sysmin+'),sg.Text(str(Constants.sysmin), size=(3, 1), font="Helvetica 80 bold",key='sysmin_value', justification='center'),sg.Button("-", size=(10,5), font=myfont, key='sysmin-')],
+          
+          [sg.Text('DIA Threshold Settings', size=(16, 1), font="Helvetica 20 bold",  justification='center')],
+         [sg.Text("DIA max(mmHg)" , font = "Ariel 16") , sg.Checkbox('Enable Beep Sound' ,change_submits=True, font="Helvetica 13", default=Constants.diaMaxBeep , auto_size_text=True , key='diamax_checkbox'),],
+         [sg.Button("+", size=(10,5), font=myfont, key='diamax+'),sg.Text(str(Constants.diamax), size=(3, 1), font="Helvetica 80 bold", key='diamax_value', justification='center'),sg.Button("-", size=(10,5), font=myfont, key='diamax-')],
+         [sg.Text("DIA min(mmHg)" , font = "Ariel 16")  , sg.Checkbox('Enable Beep Sound' ,change_submits=True ,  font="Helvetica 13", default=Constants.diaMinBeep , auto_size_text=True, key='diamin_checkbox')],
+         [sg.Button("+", size=(10,5), font=myfont, key='diamin+'),sg.Text(str(Constants.diamin), size=(3, 1), font="Helvetica 80 bold",key='diamin_value', justification='center'),sg.Button("-", size=(10,5), font=myfont, key='diamin-')],
+          
+          
+          [sg.Button("SAVE", size=(15,2), font=myfont, key='save') , sg.Button("CLOSE", size=(15,2), font=myfont, key='close')]
+          ]
+         #Define Window
+         # ,  disable_minimize=True not working in pi
+         window =sg.Window("NIBP Threshold Settings",minmaxlayout , location=(400,25)  , keep_on_top=True,  element_justification='c' , no_titlebar = True)
+
+         while True:
+             event, values = window.read()
+             if event == sg.WIN_CLOSED:
+                            break
+             if event == 'close':
+                 break
+             if event == 'save':
+                 self.nameLabel4.setText('NIBP mmHg\n'+str(Constants.sysmin)+'-'+str(Constants.sysmax)+'/'+str(Constants.diamin)+'-'+str(Constants.diamax))
+                 Constants.sysMaxBeep =  values['sysmax_checkbox']
+                 Constants.sysMinBeep =  values['sysmin_checkbox']
+
+                 Constants.diaMaxBeep =  values['diamax_checkbox']
+                 Constants.diaMinBeep =  values['diamin_checkbox']
+
+                 break
+             #sys
+             if event == 'sysmax+':
+                 Constants.sysmax = Constants.sysmax+1
+                 window['sysmax_value'].update(str(Constants.sysmax))
+             elif event == 'sysmax-':
+                 Constants.sysmax = Constants.sysmax-1
+                 window['sysmax_value'].update(str(Constants.sysmax))
+             elif event == 'sysmin+':
+                 Constants.sysmin = Constants.sysmin+1
+                 window['sysmin_value'].update(str(Constants.sysmin))
+             elif event == 'sysmin-':
+                 Constants.sysmin = Constants.sysmin-1
+                 window['sysmin_value'].update(str(Constants.sysmin))
+
+             #dia
+             if event == 'diamax+':
+                 Constants.diamax = Constants.diamax+1
+                 window['diamax_value'].update(str(Constants.diamax))
+             elif event == 'diamax-':
+                 Constants.diamax = Constants.diamax-1
+                 window['diamax_value'].update(str(Constants.diamax))
+             elif event == 'diamin+':
+                 Constants.diamin = Constants.diamin+1
+                 window['diamin_value'].update(str(Constants.diamin))
+             elif event == 'diamin-':
+                 Constants.diamin = Constants.diamin-1
+                 window['diamin_value'].update(str(Constants.diamin))
+
+         window.close()
+
+    
+
+         
+
+    def showtempraturesettings(self, event):
+         myfont = "Ariel 12 bold"
+         minmaxlayout = [
+             [sg.Text('Threshold Settings', size=(16, 1), font="Helvetica 20 bold",  justification='center')]
+             ,
+         [sg.Text("Temp max(°C)" , font = "Ariel 16") , sg.Checkbox('Enable Beep Sound' ,change_submits=True, font="Helvetica 13", default=Constants.tempMaxBeep , auto_size_text=True , key='tempmax_checkbox'),],
+         [sg.Button("+", size=(10,5), font=myfont, key='tempmax+'),sg.Text(str(Constants.tempmax), size=(3, 1), font="Helvetica 80 bold", key='tempmax_value', justification='center'),sg.Button("-", size=(10,5), font=myfont, key='tempmax-')],
+         [sg.Text("Temp min(°C)" , font = "Ariel 16")  , sg.Checkbox('Enable Beep Sound' ,change_submits=True ,  font="Helvetica 13", default=Constants.tempMinBeep , auto_size_text=True, key='tempmin_checkbox')],
+         [sg.Button("+", size=(10,5), font=myfont, key='tempmin+'),sg.Text(str(Constants.tempmin), size=(3, 1), font="Helvetica 80 bold",key='tempmin_value', justification='center'),sg.Button("-", size=(10,5), font=myfont, key='tempmin-')],
+          [sg.Button("SAVE", size=(15,2), font=myfont, key='save') , sg.Button("CLOSE", size=(15,2), font=myfont, key='close')]
+          ]
+         #Define Window
+         # ,  disable_minimize=True not working in pi
+         window =sg.Window("Temprature Threshold Settings",minmaxlayout , location=(400,200)  , keep_on_top=True,  element_justification='c' , no_titlebar = True)
+
+         while True:
+             event, values = window.read()
+             if event == sg.WIN_CLOSED:
+                            break
+             if event == 'close':
+                 break
+             if event == 'save':
+                 self.nameLabel56.setText('     '+str(Constants.tempmin)+'-'+str(Constants.tempmax)+'°C        90-98.6°F')
+                 Constants.tempMaxBeep =  values['tempmax_checkbox']
+                 Constants.tempMinBeep =  values['tempmin_checkbox']
+                 break
+             if event == 'tempmax+':
+                 Constants.tempmax = Constants.tempmax+1
+                 window['tempmax_value'].update(str(Constants.tempmax))
+             elif event == 'tempmax-':
+                 Constants.tempmax = Constants.tempmax-1
+                 window['tempmax_value'].update(str(Constants.tempmax))
+             elif event == 'tempmin+':
+                 Constants.tempmin = Constants.tempmin+1
+                 window['tempmin_value'].update(str(Constants.tempmin))
+             elif event == 'tempmin-':
+                 Constants.tempmin = Constants.tempmin-1
+                 window['tempmin_value'].update(str(Constants.tempmin))
+         window.close()
+
+
+    def shutdown_clicked(self,event):
+         shutdown_button.setStyleSheet("font-size: 12pt; color: red; background-color: #FFFFFF;")
+         print('hello do you want shutdown')
+         layout.addWidget(shutdown_button)
+
+
+
+    
+    def addbutton_clicked(self, event):
+
+     #print("graph addbutton_clicked")
+     
+     window = QDialog()
+     window.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.WindowCloseButtonHint)  # Set window flags
+     layout = QVBoxLayout(window)
+     head_text = "28"
+     tail_text = "18"
+     select_graphs_label = QtGui.QLabel("Select Graphs")
+     select_graphs_label.setStyleSheet("font-size: " + head_text + "pt; font-weight: bold; color: #383838;")
+     layout.addWidget(select_graphs_label)
+
+     leads_layout = QVBoxLayout()
+
+     l1_checkbox = QCheckBox("Lead Ⅰ")
+     l1_checkbox.setChecked(Constants.l1)
+     l1_checkbox.setStyleSheet("font-size: " + tail_text + "pt;color: #383838;")
+     l1_checkbox.setFixedSize(200, 50) 
+     leads_layout.addWidget(l1_checkbox)
+
+     l2_checkbox = QCheckBox("Lead ⅠⅠ")
+     l2_checkbox.setChecked(Constants.l2)
+     l2_checkbox.setStyleSheet("font-size: " + tail_text + "pt;color: #383838;")
+     l2_checkbox.setFixedSize(200, 50)
+     leads_layout.addWidget(l2_checkbox)
+
+
+     l3_checkbox = QCheckBox("Lead Ⅲ")
+     l3_checkbox.setChecked(Constants.l3)
+     l3_checkbox.setStyleSheet("font-size: " + tail_text + "pt;color: #383838;")
+     l3_checkbox.setFixedSize(200, 50)
+     leads_layout.addWidget(l3_checkbox)
+
+
+     avr_checkbox = QCheckBox("Lead aVR")
+     avr_checkbox.setChecked(Constants.avr)
+     avr_checkbox.setStyleSheet("font-size: " + tail_text + "pt;color: #383838;")
+     avr_checkbox.setFixedSize(200, 50)
+     leads_layout.addWidget(avr_checkbox)
+
+
+     avl_checkbox = QCheckBox("Lead aVL")
+     avl_checkbox.setChecked(Constants.avl)
+     avl_checkbox.setStyleSheet("font-size: " + tail_text + "pt;color: #383838;")
+     avl_checkbox.setFixedSize(200, 50)
+     leads_layout.addWidget(avl_checkbox)
+
+
+     avf_checkbox = QCheckBox("Lead aVF")
+     avf_checkbox.setChecked(Constants.avf)
+     avf_checkbox.setStyleSheet("font-size: " + tail_text + "pt;color: #383838;")
+     avf_checkbox.setFixedSize(200, 50)
+     leads_layout.addWidget(avf_checkbox)
+
+     layout.addLayout(leads_layout)
+     buttons_layout = QHBoxLayout()
+
+    
+     save_button = QPushButton("SAVE")
+     buttons_layout.addWidget(save_button)
+     #save_button.setStyleSheet("font-size: " + "15" + "pt;color: #383838;")
+     save_button.setStyleSheet("font-size: 15pt; color: #383838; background-color: #00ff00;")
+     save_button.setFixedSize(250,50)
+     
+     close_button = QPushButton("CLOSE")
+     buttons_layout.addWidget(close_button)
+     #close_button.setStyleSheet("font-size: " + "15" + "pt;color: #383838;")
+     close_button.setStyleSheet("font-size: 15pt; color: #383838; background-color: #ff0000;")
+     close_button.setFixedSize(250,50)
+
+    
+     # Connect button signals to slots
+     layout.addLayout(buttons_layout)
+     
+
+     
+     def save_clicked():
+        selectedPlots2 = []
+        values = {
+                    'L1' : False,
+                    'L2' : False,
+                    'L3' : False,
+                    'aVR' : False,
+                    'aVL' : False,
+                    'aVF' : False,
+                    'V1' : False,
+                    'V2' : False,
+                    'V3' : False,
+                    'V4' : False,
+                    'V5' : False,
+                    'V6' : False,
+                }
+        if l1_checkbox.isChecked():
+            #print("Lead I")
+            values['L1'] = True
+        if l2_checkbox.isChecked():
+            #print("Lead II")
+            values['L2'] = True
+
+        if l3_checkbox.isChecked():
+            #print("Lead III")
+            values['L3'] = True
+
+            
+        if avr_checkbox.isChecked():
+            #print("Lead aVR")
+            values['aVR'] = True
+
+        if avl_checkbox.isChecked():
+            #print("Lead aVL")
+            values['aVL'] = True
+
+            
+        if avf_checkbox.isChecked():
+            #print("Lead aVF")
+            values['aVF'] = True
+
+        
+        
+        #set values to map
+        self.plotMap = values
+        #print(self.plotMap)
+        i = 0
+        for key in values:
+                if values[key] == True:
+                              i = i+1
+                              selectedPlots2.append(key)
+                              
+        #print(self.selectedPlots)
+                    
+        if i == 3: 
+                            #print(selectedPlots2)
+                            self.selectedPlots.clear()
+                            self.selectedPlots = selectedPlots2
+                            plot1Colour = '#00ff00'
+                            plot1Style = "<span style=\"font-family: Arial;font-weight:bold;color:#00ff00;font-size:12pt\">"+self.selectedPlots[0]+"</span>"
+                            plot2Colour = '#00ff00'
+                            plot2Style = "<span style=\"font-family: Arial;font-weight:bold;color:#00ff00;font-size:12pt\">"+self.selectedPlots[1]+"</span>"
+                            plot3Colour = '#ffff00'
+                            plot3Style = "<span style=\"font-family: Arial;font-weight:bold;color:#ffff00;font-size:12pt\">"+self.selectedPlots[2]+"</span>"
+   
+
+
+                            self.plt.setTitle(plot1Style)
+                            self.plt2.setTitle(plot2Style)
+                            self.plt3.setTitle(plot3Style)
+                            Constants.l1 =  values['L1']
+                            Constants.l2 =  values['L2']
+                            Constants.l3 =  values['L3']
+
+                            Constants.v1 =  values['V1']
+                            Constants.v2 =  values['V2']
+                            Constants.v3 =  values['V3']
+                            Constants.v4 =  values['V4']
+                            Constants.v5 =  values['V5']
+                            Constants.v6 =  values['V6']
+
+                            Constants.avr =  values['aVR']
+                            Constants.avl =  values['aVL']
+                            Constants.avf =  values['aVF']
+                            window.close()
+     def close_clicked():
+        # Handle close button clicked event
+        window.close() 
+
+     
+     save_button.clicked.connect(save_clicked)
+     close_button.clicked.connect(close_clicked)
+
+
+     window.setModal(True)  # Set modal to block clicks outside the window
+     window.setStyleSheet("background-color: #D3D3D3;")
+
+     window.exec()
+     # self.showGraphSettings()
+
+
+    def addbutton_clicked2(self , event):
+      if self.isGraphClicked == False:
+       self.isGraphClicked = True
+       print("addbutton_clicked")
+
+       
+       self.showGraphSettings()
+
+    # method called by timer
+    def showTime(self):
+ 
+        # getting current time
+        current_time = QTime.currentTime()
+ 
+        # converting QTime object to string
+        label_time = current_time.toString('h:mm:ss ap')
+ 
+        # showing it to the label
+        #print(label_time)
+        self.head_clock.setText(label_time)
+
+
+    def ecgHrThread(self):
+        print ('Start Cal ecghr')
+        thread = threading.Thread(target = self.calculate_ecghr)
+        thread.setDaemon(True)
+        thread.start()    
+
+
+    def ecgReadThread(self):
+        print ('Start lisnening to the plot 1')
+        #serial_port = serial.Serial('/dev/ttyUSB0', '57600', timeout=0)
+        ##thread = threading.Thread(target=self.read_from_port, args=(serial_port,))
+        thread = threading.Thread(target = self.read_ecg_port)
+        thread.setDaemon(True) #Makes sures that the threas stops when exitting the program
+        thread.start()
+
+
+    def bpReadThread(self):
+        print ('Start lisnening to the bp')
+        #serial_port = serial.Serial('/dev/ttyUSB0', '57600', timeout=0)
+        ##thread = threading.Thread(target=self.read_from_port, args=(serial_port,))
+        thread = threading.Thread(target = self.read_bp)
+        thread.setDaemon(True) #Makes sures that the threas stops when exitting the program
+        thread.start()
+
+
+
+    def sensorReadThread(self):
+        print ('Start lisnening to the sensors')
+        #serial_port = serial.Serial('/dev/ttyUSB0', '57600', timeout=0)
+        ##thread = threading.Thread(target=self.read_from_port, args=(serial_port,))
+        thread = threading.Thread(target = self.read_sensors)
+        thread.setDaemon(True) #Makes sures that the threas stops when exitting the program
+        thread.start()
+
+    def tempReadThread(self):
+        print ('Start lisnening to the temparature')
+        #serial_port = serial.Serial('/dev/ttyUSB0', '57600', timeout=0)
+        ##thread = threading.Thread(target=self.read_from_port, args=(serial_port,))
+        thread = threading.Thread(target = self.read_temprature)
+        thread.setDaemon(True) #Makes sures that the threas stops when exitting the program
+        thread.start()
+
+
+    def read_temprature(self):
+     def validate(self,byteArray):
+            try:
+             str = byteArray.decode().strip()
+             if str != "" or str != "\n":
+               return str
+             else:
+               return 0
+            except:
+               return 0
+
+     try:
+      with self.tempSerial as ser:
+       ser.flushInput()
+       ser.flushOutput()
+       tempReader = SerialReader(ser)
+       presentValue = ""
+       c = 0
+       while True:
+        while ser.inWaiting() > 0:
+          times.sleep(1)
+          #presentValue = validate(self , tempReader.readline())
+          c = str(random.randint(25.1, 25.5))
+          presentValue = c+"!"+ ((float(c)*1.8)+32)
+          #print(presentValue)
+          if '!' in presentValue:
+           if c == self.cells-1:
+                         c = 0
+           readings = presentValue.split("!")
+           self.databuffertemp[c] = float(readings[0])
+           f = str(readings[1])
+         
+           self.live_temp = str(self.databuffertemp[c])
+           temprature = self.live_temp+'°C  '+f+'°F'
+         
+         
+         
+           if float(self.live_temp)>= Constants.tempmin and float(self.live_temp)<= Constants.tempmax:
+                #bpm
+                self.nameLabel55.setStyleSheet(self.tempstylesheet)
+                self.nameLabel55.setText(temprature)
+           else:
+                #bpm
+                self.nameLabel55.setStyleSheet(self.nocolourstylesheet)
+                self.nameLabel55.setStyleSheet(self.redcolourtempstylesheet)
+                self.nameLabel55.setText(temprature)
+                if Constants.tempMinBeep == True or Constants.tempMaxBeep == True:
+                    if float(self.live_temp) > 0:
+                     self.beepON()
+         
+           c=c+1       
+               
+     except:
+           print("temp thread error")
+           self.tempSerial.close()
+           #restart app
+           self.logger.setStyleSheet(self.loggerredstyle)
+           self.logger.setText('temp Error')
+
+    def read_bp(self):
+       def validate(self,byteArray):
+            
+            try:
+             str = byteArray.decode().strip()
+             if str != "" or str != "\n":
+               return str
+             else:
+               return 0
+            except:
+               return 0
+
+       try:
+        with self.bpSerial as ser:
+         ser.flushInput()
+         ser.flushOutput()
+         bpReader = SerialReader(ser)
+         presentValue = ""
+         progress = '0'
+         c = 0
+         c1 = 0
+         while True:
+          while ser.inWaiting() > 0:
+           #time.sleep(1)
+           presentValue = validate(self , bpReader.readline())
+           #print(presentValue)
+           #presentValue = str(random.randint(10, 20))+"!"+str(random.randint(20, 30))+"!"+str(random.randint(30, 40))
+           if '?' in presentValue:
+                   readings = presentValue.split('?')
+                   self.databuffertemp[c] = float(readings[0])
+                   f = str(readings[1])
+                   self.live_temp = str(self.databuffertemp[c])
+                   temprature = self.live_temp+'°C  '+f+'°F'
+                 
+                 
+                   if float(self.live_temp)>= Constants.tempmin and float(self.live_temp)<= Constants.tempmax:
+                        #bpm
+                        self.nameLabel55.setStyleSheet(self.tempstylesheet)
+                        self.nameLabel55.setText(temprature)
+                   else:
+                        #bpm
+                        self.nameLabel55.setStyleSheet(self.nocolourstylesheet)
+                        self.nameLabel55.setStyleSheet(self.redcolourtempstylesheet)
+                        self.nameLabel55.setText(temprature)
+                        if Constants.tempMinBeep == True or Constants.tempMaxBeep == True:
+                            if float(self.live_temp) > 0:
+                             self.beepON()
+
+
+           if 'failed' in presentValue:
+                    self.nameLabel45.setText('Sys / Dia(RESTART)')
+
+           elif '=' in presentValue:
+                    progress = presentValue.split('=')[1].strip()
+                   
+                    self.nameLabel45.setText('Sys / Dia('+progress+')%')
+
+           elif '!' in presentValue:
+                    self.nameLabel45.setText('Sys / Dia')
+                    progress = presentValue.split('!')
+                    self.logger.setText('')
+                    if len(progress) == 2:
+                      if c == self.cells-1:
+                         c = 0
+                      self.bpbuffer[c] = progress
+
+                      
+                      self.live_sys = str(self.bpbuffer[c][0]) 
+                      self.live_dia = str(self.bpbuffer[c][1])
+                              
+                      nibp = self.live_sys+' / '+self.live_dia
+
+                    
+                      if int(self.live_sys)>= Constants.sysmin and int(self.live_sys)<= Constants.sysmax and int(self.live_dia)>= Constants.diamin and int(self.live_dia)<= Constants.diamax:
+                        #nibp
+                        self.nameLabel44.setStyleSheet(self.nibpstylesheet)
+                        self.nameLabel44.setText(nibp)
+                    
+                    
+                      else:
+                        #nibp
+                        self.nameLabel44.setStyleSheet(self.nocolourstylesheet)
+                        self.nameLabel44.setStyleSheet(self.redcolournibpstylesheet)
+                        self.nameLabel44.setText(nibp)
+                        if Constants.sysMinBeep == True or Constants.sysMaxBeep == True or Constants.diaMinBeep == True or Constants.diaMaxBeep == True:
+                            if int(self.live_sys) > 0 and int(self.live_dia):
+                                        self.beepON()
+                    
+        
+                      c = c+1
+                    time.sleep(0.1)
+    
+               
+       except:
+           self.bpSerial.close()
+           print("bp thread error")
+           #restart app
+           self.logger.setStyleSheet(self.loggerredstyle)
+           self.logger.setText('bp sensor error')
+
+
+    def read_sensors(self):
+       def validate(self,byteArray):
+           
+            try:
+             str = byteArray.decode().strip()
+             if str != "" or str != "\n":
+               return str
+             else:
+               return 0
+            except:
+               return 0
+
+       try:
+        with self.sensorSerial as ser:
+         ser.flushInput()
+         ser.flushOutput()
+         sensorReader = SerialReader(ser)
+         presentValue = ""
+         progress = '0'
+         c = 0
+         c1 = 0
+         while True:
+          while ser.inWaiting() > 0:    
+           presentValue = validate(self , sensorReader.readline())
+           #presentValue = str(random.randint(10, 20))+"!"+str(random.randint(20, 30))+"!"+str(random.randint(30, 40))
+           if str(presentValue).isnumeric() == True:
+                      #print(presentValue)
+                      if c1 == self.cells-1:
+                         c1 = 0
+                      self.databufferppg[c1] = int(presentValue)
+                      c1 = c1+1
+           if '!' in presentValue:
+                    
+                    progress = presentValue.split('!')
+                    self.logger.setText('')
+                    if len(progress) == 3:
+                      
+                      
+                      if c == self.cells-1:
+                         c = 0
+                      self.sensorbuffer[c] = progress
+                      self.display_sensors(self.sensorbuffer[c] , c)
+                      c = c+1
+                    time.sleep(0.1)
+     
+               
+       except:
+           self.sensorSerial.close()
+           print("sensor thread error")
+           #restart app
+           self.logger.setStyleSheet(self.loggerredstyle)
+           self.logger.setText('sensor error')
+
+   
+    def beepON(self):        
+        if self.isbeep == False:
+             self.isbeep = True
+             #print ("Beep")
+             GPIO.output(buzzer,GPIO.HIGH)
+             time.sleep(0.05)
+             #print ("stop Beep")
+             GPIO.output(buzzer,GPIO.LOW)
+             self.isbeep = False
+        
+             
+
+   
+
+    def display_sensors(self , sensorData , c):
+        
+         self.avghrbuffer.append(int(sensorData[2]))
+         avghr = sum(self.avghrbuffer)/10
+
+         self.avgspotwobuffer.append(int(sensorData[1]))
+         avgspotwo = sum(self.avgspotwobuffer)/10
+
+         #print(max)
+
+                 
+         def cleanSpo2Data(data):
+             if int(data) > 100 or int(data) < 85:
+                  return "0"
+             else:
+                  return data
+               
+         def cleanData(data):
+             if int(data) > 150 :
+                  return "0"
+             else:
+                  return data
+
+         # hr
+         if int(sensorData[2]) > 165:
+                 self.live_bpm = 200
+         else:        
+                 self.live_bpm  = int((int(sensorData[2])-(0.06*int(sensorData[2])))+1)
+         self.live_spo2 = int(sensorData[1])
+         if self.live_spo2 < 95 or self.live_spo2 > 89:
+                 self.live_spo2 = self.live_spo2-2
+         if self.live_spo2 < 90 and int(self.live_bpm) != 1:
+                     self.live_spo2 = 90
+         
+                 
+         if int(self.live_bpm) == 1:
+           self.live_bpm = 0
+           self.live_spo2 = 0
+         
+         
+        
+         if int(self.live_bpm)>= Constants.ecgmin and int(self.live_bpm)<= Constants.ecgmax:
+                #bpm
+                self.nameLabel11.setStyleSheet(self.hrstylesheet)
+                self.nameLabel11.setText(str(self.live_bpm))
+         else:
+                #bpm
+                self.nameLabel11.setStyleSheet(self.nocolourstylesheet)
+                self.nameLabel11.setStyleSheet(self.redcolourstylesheet)
+                self.nameLabel11.setText(str(self.live_bpm))
+                if Constants.ecgMinBeep == True or Constants.ecgMaxBeep == True:
+
+                    if int(self.live_bpm) > 0:
+                       self.beepON()
+         
+                 
+         if int(self.live_spo2)>= Constants.spo2min and int(self.live_spo2)<= Constants.spo2max:
+                #bpm
+                self.spo2info.setStyleSheet(self.spo2StyleSheet)
+                self.spo2info.setText(str(self.live_spo2))
+         else:
+                #bpm
+                self.spo2info.setStyleSheet(self.nocolourstylesheet)
+                self.spo2info.setStyleSheet(self.redcolourstylesheet)
+                self.spo2info.setText(str(self.live_spo2))
+                if Constants.spo2MinBeep == True or Constants.spo2MaxBeep == True:
+
+                    if int(self.live_spo2) > 0:
+                      self.beepON()        
+
+         
+    def calculate_hr(self , ecg_peaks, sampling_rate):
+            rr_intervals = []
+            for i in range(1, len(ecg_peaks)):
+                rr_interval = (ecg_peaks[i] - ecg_peaks[i-1]) / sampling_rate
+                rr_intervals.append(rr_interval)
+           
+            average_rr = sum(rr_intervals) / len(rr_intervals)
+            heart_rate = 60 / average_rr
+            #print(len(rr_intervals))
+            return heart_rate
+
+    def analyze_ecg_signal(self ,data_array):
+   
+     # Find the maximum peak manually
+     max_peak = max(data_array) * 0.75
+     peaks, _ = find_peaks(data_array, height = max_peak)
+
+     num_peaks = peaks
+
+     return num_peaks
+
+
+
+
+               
+    def calculate_ecghr(self):
+        ecghr = 0
+        avgbuff = collections.deque([0]*10, 10)
+        c = 0
+        while True:
+         time.sleep(5.8)
+         if c == 10:
+                 c = 0
+         r_peaks = self.detectors.pan_tompkins_detector(self.databufferecg)
+        
+         peaks = len(r_peaks)
+         #print(r_peaks)
+         hr = 0
+         if len(r_peaks) >= 2:
+                 difarray=[]
+                 for i in range(len(r_peaks) - 1):
+                         
+                         dif = r_peaks[i+1] - r_peaks[i]
+                         difarray.append(dif*0.008)
+                 avgdif=sum ( difarray)/len(difarray)      
+                 #hr = int(7500/avgrrintervel)
+                 hr = int(60/avgdif)
+                 
+         self.live_ecghr = str(hr)
+         
+         if int(self.live_ecghr)>= Constants.ecgmin and int(self.live_ecghr)<= Constants.ecgmax:
+                #bpm
+                self.nameLabel00.setStyleSheet(self.ecgstylesheet)
+                self.nameLabel00.setText(str(self.live_ecghr))
+         else:
+                #bpm
+                self.nameLabel00.setStyleSheet(self.nocolourstylesheet)
+                self.nameLabel00.setStyleSheet(self.redcolourecgstylesheet)
+                self.nameLabel00.setText(str(self.live_ecghr))
+                if Constants.ecgMinBeep == True or Constants.ecgMaxBeep == True:
+
+                    if int(self.live_ecghr) > 0:
+                       self.beepON()
+
+    def read_ecg_port(self):
+       try:
+        print("aaaaaaaaa")
+        with self.ecgSerial as ser:
+         ser.flushInput()
+         ser.flushOutput()
+         print("bbbbbbbbbb")
+         print("cccccccccc")
+         ecgReader = SerialReader(ser)
+         presentValue = '0'
+         leadsData = []
+         p1Value = 0
+         p2Value = 0
+         p3Value = 0
+         c = 0
+         c1 = 62
+         isNumber = False
+         print("QWERTY")
+         secondloop = False
+         while True:
+          while ser.inWaiting() > 0:
+                               
+             presentValue = ecgReader.readline().decode().strip()
+             if '!' in presentValue:
+              leadsData = presentValue.split('!') 
+              if len(leadsData) == 2:
+               a0 = float(leadsData[0])
+               a1 = float(leadsData[1])
+               if a0<850 and a0> 100  and a1 < 850 and a1> 100:
+                  if c == self.cells-1:
+                       c = 0
+                     
+                  if c1 == self.cells-64:
+                       c1 = 62
+                       
+                        
+                  #time.sleep(0.0001)  
+                  L1Value = a0
+                  #print(L1Value)
+                  L3Value = a1
+                  #print(L3Value)
+                  L2Value = L1Value - L3Value
+                  #print(L2Value)
+                  self.databufferecg[c1] = L1Value
+                  
+                  p4Value = 0
+                  self.databuffer4[c] = p4Value
+                  
+                  
+                  avrValue = ((L1Value+L2Value)*0.5)
+                  #print(avrValue)
+                  avlValue = ((L1Value-L3Value)*0.5)
+                  #print(avlValue)
+                  avfValue = ((L2Value+L3Value)*0.5)
+                  #print(avfValue)
+                  #print(self.selectedPlots)
+                  if len(self.selectedPlots) == 3:
+
+                        plot1 =  self.selectedPlots[0]
+                        #print(plot1)
+                        if plot1 == 'L1':
+                                   #print("a")
+                                   secondloop = False
+                                   self.databuffer[c] = L1Value
+                        elif plot1 == 'L2':
+                                   #print("b")
+                                   secondloop = False
+                                   self.databuffer[c] = L2Value
+                        elif plot1 == 'L3':
+                                   #print("c")
+                                   secondloop = False
+                                   self.databuffer[c] = L3Value
+                        elif plot1 == 'aVR':
+                                   #print("d")
+                                   self.databuffer[c] = avrValue
+                                   #print(self.databuffer[c])
+                                   secondloop = True
+                        elif plot1 == 'aVL':
+                                   #print("e")
+                                   secondloop = True
+                                   self.databuffer[c] = avlValue
+                        elif plot1 == 'aVF':
+                                   #print("f")
+                                   secondloop = True
+                                   self.databuffer[c] = avfValue
+
+                                   
+
+                        plot2 =  self.selectedPlots[1]
+                        #print(plot2)
+                        if plot2 == 'L1':
+                                   secondloop = False
+                                   self.databuffer2[c] = L1Value
+                        elif plot2 == 'L2':
+                                   secondloop = False
+                                   self.databuffer2[c] = L2Value
+                        elif plot2 == 'L3':
+                                   secondloop = False
+                                   self.databuffer2[c] = L3Value
+                        elif plot2 == 'aVR':
+                                   secondloop = True
+                                   self.databuffer2[c] = avrValue
+                        elif plot2 == 'aVL':
+                                   self.databuffer2[c] = avlValue
+                                   secondloop = True
+                        elif plot2 == 'aVF':
+                                   secondloop = True
+                                   self.databuffer2[c] = avfValue
+
+                        plot3 =  self.selectedPlots[2]
+                        #print(plot3)
+                        if plot3 == 'L1':
+                                   secondloop = False
+                                   self.databuffer3[c] = L1Value
+                        elif plot3 == 'L2':
+                                   secondloop = False
+                                   self.databuffer3[c] = L2Value
+                        elif plot3 == 'L3':
+                                   secondloop = False
+                                   self.databuffer3[c] = L3Value
+                        elif plot3 == 'aVR':
+                                   secondloop = True
+                                   self.databuffer3[c] = avrValue
+                        elif plot3 == 'aVL':
+                                   secondloop = True
+                                   self.databuffer3[c] = avlValue
+                        elif plot3 == 'aVF':
+                                   secondloop = True
+                                   self.databuffer3[c] = avfValue
+                  #print(self.databuffer[c])
+                  #opti
+                  
+                  c = c+1
+                  c1 = c1+1
+
+
+       except:
+           self.ecgSerial.close()
+           print("ecg thread error")
+           #restart app
+           self.logger.setStyleSheet(self.loggerredstyle)
+           self.logger.setText('ECG Error')
+
+
+           
+
+    def smooth(self,y, box_pts):
+         box = np.ones(box_pts)/box_pts
+         y_smooth = np.convolve(y, box, mode='same')
+         return y_smooth
+
+
+    def plotSpectrum(self , y):
+           n = self.cells
+           k = arange(n)
+           T = n/Constants.Fs
+           frq = k/T # two sides frequency range
+           frq = frq[range(n/2)] # one side frequency range
+           Y = fft(y)/n # fft computing and normalization
+           Y = Y[range(n/2)]
+
+           return abs(Y)
+           
+
+    def signalProcessing(self , input):
+        #lowpass
+   
+        filltered_data = self.lowpass_filter(input,44.5,0.5*Constants.Fs)
+        
+        
+        return filltered_data
+
+    def notchFilter(self , input):
+        notch_freq = 60
+        quality_factor = 1.0
+        b_notch, a_notch = signal.iirnotch(notch_freq, quality_factor, Constants.Fs)
+        final_data = signal.filtfilt(b_notch, a_notch, input)
+        return final_data   
+
+
+    def remove_spikes(self , signal, window_size):
+     filtered_signal = np.copy(signal)
+     for i in range(window_size, len(signal) - window_size):
+        window = signal[i - window_size:i + window_size + 1]
+        median = np.median(window)
+        if np.abs(int(signal[i]) - median) > 2.5:
+            filtered_signal[i] = median
+     return filtered_signal
+
+    def updateplot(self):
+        
+        self.y1 = self.databuffer
+        self.fy1 = self.signalProcessing(self.y1)
+        self.fy11 = medfilt(self.fy1 , kernel_size = 3)
+        self.curve.setData(self.x, self.fy11)
+
+        
+        self.y2 = self.databuffer2
+        self.fy2 = self.signalProcessing(self.y2)
+        self.fy22 = medfilt(self.fy1 , kernel_size = 3)
+        self.curve2.setData(self.x, self.fy22)
+       
+       
+        self.y3 = self.databuffer3
+        self.fy3 = self.signalProcessing(self.y3)
+        self.fy33 = self.signalProcessing(self.y3)
+        self.curve3.setData(self.x, self.fy33)
+        
+        self.y4 = self.databufferppg
+        self.fy4 = self.signalProcessing(self.y4)
+        self.curve4.setData(self.x, self.fy4)
+      
+         
+        self.app.processEvents()
+
+    def run(self):
+        print("project started")
+        self.app.exec_()
+        GPIO.output(26,GPIO.LOW)
+        print("project closing wait.....")
+        time.sleep(3)
+        
+        
+        self.sensorSerial.close()
+        #self.tempSerial.close()
+        self.ecgSerial.close()
+        self.bpSerial.close()
+        
+
+        print("project closed")
+
+
+class Constants():
+    #gui
+    graphWidth = 1.5
+    plot1Colour = '#00ff00'
+    plot1Style = "<span style=\"font-family: Arial;font-weight:bold;color:#00ff00;font-size:12pt\">I</span>"
+    plot2Colour = '#00ff00'
+    plot2Style = "<span style=\"font-family: Arial;font-weight:bold;color:#00ff00;font-size:12pt\">II</span>"
+    plot3Colour = '#ffff00'
+    plot3Style = "<span style=\"font-family: Arial;font-weight:bold;color:#ffff00;font-size:12pt\">III</span>"
+    plot4Colour = '#189AB4'
+    plot4Style = "<span style=\"font-family: Arial;font-weight:bold;color:#189AB4;font-size:12pt\">PPG</span>"
+
+    ##################
+    Fs = 125
+    avgOf = 2
+    
+
+    ecgmin = 1
+    ecgMinBeep = True
+    ecgmax = 200
+    ecgMaxBeep = False
+
+   
+    spo2min = 80
+    spo2MinBeep = True
+    spo2max = 120
+    spo2MaxBeep = False
+
+    sysmin = 100
+    sysMinBeep = True
+    sysmax = 150
+    sysMaxBeep = False
+
+    diamin = 50
+    diaMinBeep = True
+    diamax = 100
+    diaMaxBeep = False
+
+    tempmin = 16
+    tempMinBeep = True
+    tempmax = 45
+    tempMaxBeep = False
+
+
+    ##################
+
+    beepOffset  = 150
+
+
+    #sensorCom = 'COM11'
+    sensorCom = '/dev/ttyACM0'
+    sensorSpeed = 115200
+    #sensorSpeed = 57600
+
+    #tempCom = '/dev/ttyUSB1'
+    #tempSpeed = 9600
+
+    bpCom = '/dev/ttyACM1'
+    bpSpeed = 115200
+    
+    #ecgcom = 'COM9'
+    ecgcom = '/dev/ttyUSB0'
+    ecgSpeed = 115200
+    #ecg2com = 'COM8'
+    
+    
+    #ecg2com = '/dev/ttyACM1'
+    #ecg3com = '/dev/ttyACM2'
+
+    l1= True
+    l2= True
+    l3= True
+
+    v1 = False
+    v2 = False
+    v3 = False
+    v4 = False
+    v5 = False
+    v6 = False
+
+    avr = False
+    avl = False
+    avf = False
+
+
+if __name__ == '__main__':
+
+    m = DynamicPlotter()
+    m.run()
+    app.exec_()
